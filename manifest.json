@@ -1,0 +1,16 @@
+{
+  "name": "AZIER SUITE SERVICE",
+  "short_name": "AZIER",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f1f5f9",
+  "theme_color": "#2563eb",
+  "description": "Sistema ERP y CRM para gestión de Órdenes, Soporte IT, Marketing y Diseño Gráfico.",
+  "icons": [
+    {
+      "src": "./icon.png",
+      "sizes": "1024x1024",
+      "type": "image/png"
+    }
+  ]
+}

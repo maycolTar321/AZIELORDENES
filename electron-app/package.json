@@ -1,0 +1,24 @@
+{
+  "name": "aziel-pro",
+  "version": "1.0.0",
+  "description": "AZIEL PRO - Sistema de Gestión Nivel Dios",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.aziel.pro",
+    "productName": "AZIEL PRO",
+    "win": {
+      "target": "nsis",
+      "icon": "icon.png"
+    }
+  },
+  "author": "Fam. Avila Villanueva",
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^25.3.0",
+    "electron-builder": "^24.6.4"
+  }
+}
