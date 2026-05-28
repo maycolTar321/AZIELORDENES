@@ -1,365 +1,627 @@
-// --- SISTEMA DE ALMACENAMIENTO (LocalStorage) ---
-const db = {
-    clients: JSON.parse(localStorage.getItem('azier_clients')) || [],
-    inventory: JSON.parse(localStorage.getItem('azier_inventory')) || [
-        { id: '1', code: 'IT-001', name: 'Cable de Red Cat6 (m)', stock: 500, min: 100, price: 5 },
-        { id: '2', code: 'MK-001', name: 'Impresión Banner (m2)', stock: 50, min: 10, price: 45 }
-    ],
-    orders: JSON.parse(localStorage.getItem('azier_orders')) || [],
-    cart: []
-};
+/**
+ * NÚCLEO LOGÍSTICO Y MOTOR OPERATIVO COMPLETO: AZIER SUITE SERVICE
+ * Conectado 100% a la Base de Datos PHP (api.php)
+ */
 
-const saveData = (key) => localStorage.setItem(`azier_${key}`, JSON.stringify(db[key]));
+const API_URL = "api.php";
+let globalOrders = [];
+let globalClients = [];
+let globalInventory = [];
+let globalTasks = [];
+let globalUsers = [];
+let globalBriefs = [];
+let currentUser = null;
+let currentCart = [];
+let chartInstance = null;
 
-// --- INICIALIZACIÓN ---
-document.addEventListener('DOMContentLoaded', () => {
-    initClock();
-    setupNavigation();
-    setupAuth();
-    renderAllViews();
-    initCharts();
+// =========================================================================
+// 1. INICIALIZADOR PRINCIPAL
+// =========================================================================
+document.addEventListener("DOMContentLoaded", () => {
+    configurarEventosAutenticacion();
+    configurarEventosNavegacion();
+    inicializarRelojMilitar();
+    
+    // Bypass login completely per user request
+    currentUser = { email: 'admin-local', role: 'superadmin' };
+    loguearExitosamenteApp();
 });
 
-// --- NAVEGACIÓN Y TEMA ---
-function setupNavigation() {
-    const navItems = document.querySelectorAll('.nav-item');
+// =========================================================================
+// 2. CONEXIÓN API Y DATOS
+// =========================================================================
+async function fetchData() {
+    try {
+        const res = await fetch(`${API_URL}?action=get_data`);
+        const data = await res.json();
+        
+        globalOrders = data.orders || [];
+        globalClients = data.clients || [];
+        globalInventory = data.inventory || [];
+        globalTasks = data.tasks || [];
+        globalUsers = data.users || [];
+        globalBriefs = data.briefs || [];
+        
+        updateUI();
+        
+        const loader = document.getElementById("loader-initial");
+        if(loader) loader.style.display = "none";
+    } catch(e) {
+        console.error("Error conectando a DB", e);
+        showToast("Error crítico conectando a la base de datos.", "error");
+        const loader = document.getElementById("loader-initial");
+        if(loader) loader.style.display = "none";
+    }
+}
+
+function updateUI() {
+    renderizarEstadisticasYGraficos();
+    renderInventory();
+    renderClients();
+    renderKanban();
+    // Poblar modales si están abiertos en background (optimización)
+    poblarModalClientes('');
+    poblarModalInventario('');
+}
+
+// =========================================================================
+// 3. TOAST NOTIFICATIONS (Reemplazo de Alert)
+// =========================================================================
+function showToast(message, type = 'success') {
+    const toastContainer = document.getElementById('toast-container') || createToastContainer();
+    const toast = document.createElement('div');
+    toast.className = `toast-msg toast-${type}`;
+    toast.innerHTML = `<i class="fa-solid ${type === 'success' ? 'fa-check-circle' : 'fa-triangle-exclamation'}"></i> <span>${message}</span>`;
+    toastContainer.appendChild(toast);
+    
+    setTimeout(() => { toast.classList.add('fade-out'); }, 2500);
+    setTimeout(() => { toast.remove(); }, 2800);
+}
+
+function createToastContainer() {
+    const div = document.createElement('div');
+    div.id = 'toast-container';
+    document.body.appendChild(div);
+    return div;
+}
+
+// =========================================================================
+// 4. AUTENTICACIÓN
+// =========================================================================
+function configurarEventosAutenticacion() {
+    const btnLogin = document.getElementById("btn-login");
+    const btnLogout = document.getElementById("btn-logout");
+
+    if (btnLogin) {
+        btnLogin.addEventListener("click", async () => {
+            const email = document.getElementById("login-email").value.trim();
+            const pass = document.getElementById("login-pass").value;
+
+            try {
+                const res = await fetch(API_URL + "?action=login", {
+                    method: 'POST',
+                    body: JSON.stringify({email, password: pass})
+                });
+                const data = await res.json();
+
+                if(data.success) {
+                    currentUser = data.user;
+                    localStorage.setItem("AZIER_SESSION", JSON.stringify(currentUser));
+                    loguearExitosamenteApp();
+                } else {
+                    document.getElementById("login-error").innerText = data.error;
+                    document.getElementById("login-error").style.display = "block";
+                }
+            } catch(e) { console.error(e); }
+        });
+    }
+
+    if(btnLogout) {
+        btnLogout.addEventListener("click", () => {
+            localStorage.removeItem("AZIER_SESSION");
+            window.location.reload();
+        });
+    }
+}
+
+function loguearExitosamenteApp() {
+    document.getElementById("login-overlay").classList.remove("active");
+    if(currentUser.role === 'superadmin' || currentUser.role === 'admin') {
+        document.getElementById("nav-admin").style.display = "flex";
+    }
+    fetchData();
+}
+
+// =========================================================================
+// 5. NAVEGACIÓN Y TABS
+// =========================================================================
+function configurarEventosNavegacion() {
+    const navItems = document.querySelectorAll(".nav-item");
     navItems.forEach(item => {
-        item.addEventListener('click', (e) => {
-            const targetId = item.getAttribute('data-target');
-            if (!targetId) return;
+        item.addEventListener("click", function() {
+            document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
+            this.classList.add("active");
+
+            const targetView = this.getAttribute("data-target");
+            document.querySelectorAll(".view-section").forEach(sec => sec.classList.remove("active"));
+            document.getElementById(targetView).classList.add("active");
             
-            // UI Activa
-            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-            item.classList.add('active');
-            
-            // Cambiar Vista
-            document.querySelectorAll('.view-section').forEach(v => v.classList.remove('active'));
-            document.getElementById(targetId).classList.add('active');
-            
-            // Refrescar gráficos si entra al Dashboard
-            if (targetId === 'view-dashboard') updateCharts();
+            if(targetView === 'view-dashboard') renderizarEstadisticasYGraficos();
         });
     });
 
-    document.getElementById('theme-toggle').addEventListener('click', () => {
-        const body = document.body;
-        const isDark = body.getAttribute('data-theme') === 'dark';
-        body.setAttribute('data-theme', isDark ? 'light' : 'dark');
-    });
+    const themeToggle = document.getElementById('theme-toggle');
+    if(themeToggle) {
+        themeToggle.addEventListener('click', () => {
+            const current = document.documentElement.getAttribute('data-theme');
+            if(current === 'dark') {
+                document.documentElement.removeAttribute('data-theme');
+                themeToggle.innerHTML = '<i class="fa-solid fa-moon"></i>';
+                localStorage.setItem('AZIER_THEME', 'light');
+            } else {
+                document.documentElement.setAttribute('data-theme', 'dark');
+                themeToggle.innerHTML = '<i class="fa-solid fa-sun"></i>';
+                localStorage.setItem('AZIER_THEME', 'dark');
+            }
+            renderizarEstadisticasYGraficos();
+        });
+    }
+    if(localStorage.getItem('AZIER_THEME') === 'dark') {
+        document.documentElement.setAttribute('data-theme', 'dark');
+        if(themeToggle) themeToggle.innerHTML = '<i class="fa-solid fa-sun"></i>';
+    }
 }
 
-function initClock() {
+function inicializarRelojMilitar() {
     setInterval(() => {
-        const now = new Date();
-        document.getElementById('real-time-clock').innerText = now.toLocaleTimeString('es-BO');
-        document.getElementById('current-date').innerText = now.toLocaleDateString('es-BO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+        const reloj = document.getElementById("real-time-clock");
+        if (reloj) reloj.innerText = new Date().toTimeString().split(' ')[0];
     }, 1000);
 }
 
-// --- AUTENTICACIÓN BÁSICA ---
-function setupAuth() {
-    const overlay = document.getElementById('login-overlay');
-    document.getElementById('btn-login').addEventListener('click', () => {
-        // Simulación nivel Dios: Ignora credenciales para la demo, entra directo
-        overlay.classList.remove('active');
-        showToast('¡Bienvenido a AZIER Suite!', 'success');
-    });
-    document.getElementById('go-to-register').addEventListener('click', () => {
-        document.getElementById('box-login').style.display = 'none';
-        document.getElementById('box-register').style.display = 'block';
-    });
-    document.getElementById('go-to-login').addEventListener('click', () => {
-        document.getElementById('box-register').style.display = 'none';
-        document.getElementById('box-login').style.display = 'block';
-    });
-}
+// =========================================================================
+// 6. RENDERIZADO BÁSICO (DASHBOARD)
+// =========================================================================
+function renderizarEstadisticasYGraficos() {
+    const itC = globalOrders.filter(o => o.module==='it' && o.status!=='Completado').length;
+    const mkC = globalOrders.filter(o => o.module==='mk' && o.status!=='Completado').length;
+    const dgC = globalOrders.filter(o => o.module==='dg' && o.status!=='Completado').length;
+    
+    if(document.getElementById('dash-it-count')) document.getElementById('dash-it-count').innerText = itC + ' Activas';
+    if(document.getElementById('dash-mk-count')) document.getElementById('dash-mk-count').innerText = mkC + ' Campañas';
+    if(document.getElementById('dash-dg-count')) document.getElementById('dash-dg-count').innerText = dgC + ' Proyectos';
 
-// --- RENDERIZADO GLOBAL ---
-function renderAllViews() {
-    renderCRM();
-    renderInventory();
-    setupCartLogic();
-    renderKanban();
-    updateDashboardStats();
-}
+    let totalRev = 0;
+    globalOrders.forEach(o => { if(o.status!=='Cotización') totalRev += parseFloat(o.advance || 0); });
+    
+    if(document.getElementById('dash-revenue')) document.getElementById('dash-revenue').innerText = 'Bs. ' + totalRev.toFixed(2);
+    if(document.getElementById('dash-active')) document.getElementById('dash-active').innerText = itC+mkC+dgC;
+    if(document.getElementById('dash-clients')) document.getElementById('dash-clients').innerText = globalClients.length;
 
-// --- CRM (CLIENTES) ---
-function renderCRM() {
-    const grid = document.getElementById('clients-grid');
-    const datalist = document.getElementById('clients-datalist');
-    grid.innerHTML = '';
-    datalist.innerHTML = '';
+    const ctx = document.getElementById('revenueChart');
+    if(!ctx) return;
+    
+    if(chartInstance) chartInstance.destroy();
+    
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const gridColor = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
+    const textColor = isDark ? '#94a3b8' : '#475569';
 
-    if (db.clients.length === 0) {
-        grid.innerHTML = '<p class="text-muted">No hay clientes registrados. Crea uno nuevo.</p>';
-        return;
-    }
-
-    db.clients.forEach(c => {
-        grid.innerHTML += `
-            <div class="card-glass" style="padding: 15px;">
-                <h4 style="margin-bottom: 5px;"><i class="fa-solid fa-building" style="color:var(--accent)"></i> ${c.name}</h4>
-                <p class="text-muted"><i class="fa-solid fa-phone"></i> ${c.phone}</p>
-            </div>
-        `;
-        datalist.innerHTML += `<option value="${c.name}">${c.phone}</option>`;
-    });
-}
-
-window.openClientModal = function() {
-    const name = prompt("Nombre del Cliente/Empresa:");
-    const phone = prompt("Teléfono (WhatsApp):");
-    if (name && phone) {
-        db.clients.push({ id: Date.now().toString(), name, phone });
-        saveData('clients');
-        renderCRM();
-        showToast('Cliente guardado con éxito', 'success');
-    }
-};
-
-// --- INVENTARIO ---
-function renderInventory() {
-    const tbody = document.getElementById('inventory-list');
-    tbody.innerHTML = '';
-
-    db.inventory.forEach(i => {
-        const isLow = i.stock <= i.min;
-        tbody.innerHTML += `
-            <tr>
-                <td><strong>${i.code}</strong></td>
-                <td>${i.name}</td>
-                <td class="${isLow ? 'text-danger' : 'text-success'}"><strong>${i.stock}</strong></td>
-                <td>${i.min}</td>
-                <td><span class="badge" style="background:${isLow ? 'var(--danger)' : 'var(--success)'}; padding: 4px 8px; border-radius: 4px; color: white;">${isLow ? 'Bajo' : 'Óptimo'}</span></td>
-                <td><button class="btn-oc" onclick="deleteInventory('${i.id}')"><i class="fa-solid fa-trash"></i></button></td>
-            </tr>
-        `;
-    });
-}
-
-window.openInventoryModal = function() {
-    const name = prompt("Nombre del Material:");
-    const stock = prompt("Stock Actual:");
-    const min = prompt("Stock Mínimo de alerta:");
-    if (name && stock) {
-        db.inventory.push({ 
-            id: Date.now().toString(), 
-            code: 'M-' + Math.floor(Math.random() * 1000), 
-            name, 
-            stock: parseInt(stock), 
-            min: parseInt(min),
-            price: 0
+    try {
+        chartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: ['IT', 'Marketing', 'Diseño'],
+                datasets: [{
+                    data: [
+                        globalOrders.filter(o=>o.module==='it').reduce((acc,o)=>acc+parseFloat(o.total||0),0),
+                        globalOrders.filter(o=>o.module==='mk').reduce((acc,o)=>acc+parseFloat(o.total||0),0),
+                        globalOrders.filter(o=>o.module==='dg').reduce((acc,o)=>acc+parseFloat(o.total||0),0)
+                    ],
+                    backgroundColor: ['#0ea5e9', '#ec4899', '#8b5cf6'],
+                    borderRadius: 6
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { grid: { color: gridColor }, ticks: { color: textColor } },
+                    x: { grid: { display: false }, ticks: { color: textColor } }
+                }
+            }
         });
-        saveData('inventory');
-        renderInventory();
-        showToast('Material agregado', 'success');
+    } catch (e) {
+        console.warn("Chart.js failed to load or initialize.", e);
     }
-};
-
-window.deleteInventory = function(id) {
-    db.inventory = db.inventory.filter(i => i.id !== id);
-    saveData('inventory');
-    renderInventory();
-};
-
-// --- LÓGICA DE COTIZACIÓN (NEW ORDER) ---
-function setupCartLogic() {
-    document.getElementById('btn-add-row').addEventListener('click', () => {
-        db.cart.push({ desc: 'Nuevo Ítem', qty: 1, price: 0 });
-        renderCart();
-    });
-
-    document.getElementById('order-discount').addEventListener('input', calculateTotals);
-    document.getElementById('order-advance').addEventListener('input', calculateTotals);
-
-    document.getElementById('btn-save').addEventListener('click', saveOrder);
 }
+
+// =========================================================================
+// 7. ORDENES & MODALES (La selección visual brutal)
+// =========================================================================
+window.abrirModalClienteSelect = () => {
+    document.getElementById('modal-select-client').classList.add('active');
+    poblarModalClientes('');
+};
+
+window.abrirModalInventorySelect = () => {
+    document.getElementById('modal-select-inventory').classList.add('active');
+    poblarModalInventario('');
+};
+
+document.getElementById('search-modal-client')?.addEventListener('input', (e) => poblarModalClientes(e.target.value));
+document.getElementById('search-modal-inventory')?.addEventListener('input', (e) => poblarModalInventario(e.target.value));
+
+function poblarModalClientes(query) {
+    const list = document.getElementById('modal-client-list');
+    if(!list) return;
+    list.innerHTML = '';
+    const filtered = globalClients.filter(c => c.name.toLowerCase().includes(query.toLowerCase()));
+    filtered.forEach(c => {
+        list.innerHTML += `<div class="selection-item" onclick="seleccionarCliente('${c.name}', '${c.phone}')">
+            <div class="selection-title">${c.name}</div>
+            <div class="selection-meta"><i class="fa-brands fa-whatsapp"></i> ${c.phone || 'N/A'}</div>
+        </div>`;
+    });
+}
+
+function poblarModalInventario(query) {
+    const list = document.getElementById('modal-inventory-list');
+    if(!list) return;
+    list.innerHTML = '';
+    const filtered = globalInventory.filter(i => i.item_name.toLowerCase().includes(query.toLowerCase()));
+    filtered.forEach(i => {
+        list.innerHTML += `<div class="selection-item" onclick="agregarAlCarrito('${i.item_name}', ${i.price || 0})">
+            <div>
+                <div class="selection-title">${i.item_name}</div>
+                <div class="selection-meta">Stock: ${i.stock_current}</div>
+            </div>
+            <div style="font-weight:800; color:var(--accent);">Bs. ${i.price || '0.00'}</div>
+        </div>`;
+    });
+}
+
+window.seleccionarCliente = (name, phone) => {
+    document.getElementById('order-client').value = name;
+    document.getElementById('order-phone').value = phone;
+    document.getElementById('modal-select-client').classList.remove('active');
+    showToast("Cliente seleccionado", "success");
+};
+
+window.agregarAlCarrito = (name, price) => {
+    currentCart.push({ desc: name, price: price });
+    document.getElementById('modal-select-inventory').classList.remove('active');
+    renderCart();
+    showToast("Ítem añadido a la orden", "success");
+};
 
 function renderCart() {
     const tbody = document.getElementById('cart-body');
+    if(!tbody) return;
     tbody.innerHTML = '';
-    
-    db.cart.forEach((item, index) => {
-        tbody.innerHTML += `
-            <tr>
-                <td><input type="text" value="${item.desc}" onchange="updateCart(${index}, 'desc', this.value)"></td>
-                <td><input type="number" value="${item.qty}" min="1" onchange="updateCart(${index}, 'qty', this.value)"></td>
-                <td><input type="number" value="${item.price}" min="0" step="0.1" onchange="updateCart(${index}, 'price', this.value)"></td>
-                <td><button class="btn-icon-del" onclick="removeFromCart(${index})"><i class="fa-solid fa-xmark"></i></button></td>
-            </tr>
-        `;
+    let subtotal = 0;
+    currentCart.forEach((item, index) => {
+        subtotal += parseFloat(item.price);
+        tbody.innerHTML += `<tr>
+            <td>${item.desc}</td>
+            <td style="font-weight:700;">Bs. ${item.price}</td>
+            <td><button class="btn-icon-del" onclick="removerDelCarrito(${index})"><i class="fa-solid fa-trash"></i></button></td>
+        </tr>`;
     });
-    calculateTotals();
+    
+    if(document.getElementById('sum-subtotal')) document.getElementById('sum-subtotal').innerText = `Bs. ${subtotal.toFixed(2)}`;
+    if(document.getElementById('sum-total')) document.getElementById('sum-total').innerText = `Bs. ${subtotal.toFixed(2)}`;
 }
 
-window.updateCart = function(index, field, value) {
-    db.cart[index][field] = field === 'desc' ? value : parseFloat(value) || 0;
-    calculateTotals();
-}
-
-window.removeFromCart = function(index) {
-    db.cart.splice(index, 1);
+window.removerDelCarrito = (idx) => {
+    currentCart.splice(idx, 1);
     renderCart();
-}
+};
 
-function calculateTotals() {
-    let subtotal = db.cart.reduce((sum, item) => sum + (item.qty * item.price), 0);
-    let discount = parseFloat(document.getElementById('order-discount').value) || 0;
-    let total = subtotal - discount;
-    let advance = parseFloat(document.getElementById('order-advance').value) || 0;
-    let balance = total - advance;
-
-    document.getElementById('sum-subtotal').innerText = `Bs. ${subtotal.toFixed(2)}`;
-    document.getElementById('sum-total').innerText = `Bs. ${total.toFixed(2)}`;
-    document.getElementById('sum-balance').innerText = `Bs. ${balance.toFixed(2)}`;
-}
-
-function saveOrder() {
+document.getElementById('btn-save')?.addEventListener('click', async () => {
     const client = document.getElementById('order-client').value;
-    if (!client || db.cart.length === 0) {
-        showToast('Falta cliente o ítems en la cotización', 'warning');
-        return;
+    const phone = document.getElementById('order-phone').value;
+    const module = document.getElementById('order-module').value;
+    const project = document.getElementById('order-project').value;
+    
+    if(!client || currentCart.length === 0) {
+        return showToast("Falta cliente o ítems en la orden", "error");
     }
-
-    const order = {
-        id: Math.floor(Math.random() * 10000).toString(),
-        client: client,
-        phone: document.getElementById('order-phone').value,
-        project: document.getElementById('order-project').value,
-        status: document.getElementById('order-status').value,
-        total: parseFloat(document.getElementById('sum-total').innerText.replace('Bs. ', '')),
-        date: new Date().toLocaleDateString('es-BO')
+    
+    let subtotal = currentCart.reduce((a,b)=>a+parseFloat(b.price),0);
+    
+    const payload = {
+        module, client, phone, project, status: "Cotización",
+        subtotal: subtotal, discount: 0, total: subtotal, advance: 0, balance: subtotal,
+        notes: "", items: currentCart
     };
-
-    db.orders.push(order);
-    saveData('orders');
     
-    // Limpiar formulario
-    db.cart = [];
-    document.getElementById('order-client').value = '';
-    document.getElementById('order-project').value = '';
-    renderCart();
-    renderKanban();
-    updateDashboardStats();
-    
-    showToast('Orden Guardada Exitosamente', 'success');
-    document.querySelector('[data-target="view-orders"]').click();
-}
+    const res = await fetch(API_URL + "?action=save_order", { method:'POST', body: JSON.stringify(payload) });
+    const data = await res.json();
+    if(data.success) {
+        showToast("Orden procesada exitosamente", "success");
+        currentCart = [];
+        renderCart();
+        document.getElementById('order-client').value = '';
+        fetchData(); // Reload
+    }
+});
 
-// --- KANBAN Y ÓRDENES ---
-function renderKanban() {
-    const columns = { 'Cotización': '', 'En Proceso': '', 'Pendiente de Pago': '', 'Completado': '' };
-    const counts = { 'Cotización': 0, 'En Proceso': 0, 'Pendiente de Pago': 0, 'Completado': 0 };
-
-    db.orders.forEach(o => {
-        let status = o.status.replace(/ /g, '-');
-        if(!columns[o.status]) return;
-
-        counts[o.status]++;
-        columns[o.status] += `
-            <div class="order-card oc-status-${status}">
-                <div class="oc-header">
-                    <div class="oc-client">${o.client} <br><span class="oc-date">#${o.id} - ${o.date}</span></div>
-                </div>
-                <div class="oc-desc">${o.project || 'Sin descripción'}</div>
-                <div class="oc-footer">
-                    <div class="oc-price">Bs. ${o.total.toFixed(2)}</div>
-                    <div class="oc-actions">
-                        <button class="btn-oc" onclick="deleteOrder('${o.id}')"><i class="fa-solid fa-trash text-danger"></i></button>
-                    </div>
+// =========================================================================
+// 8. RENDER LISTS (CRM, INVENTORY, KANBAN)
+// =========================================================================
+function renderClients() {
+    const grid = document.getElementById("clients-grid");
+    if(!grid) return;
+    grid.innerHTML = '';
+    globalClients.forEach(c => {
+        const safeName = c.name || 'Sin Nombre';
+        const initial = safeName.charAt(0).toUpperCase();
+        grid.innerHTML += `<div class="client-card contact-card card-glass">
+            <div class="contact-header">
+                <div class="contact-avatar">${initial}</div>
+                <div class="contact-info">
+                    <h3>${safeName}</h3>
+                    <p><i class="fa-solid fa-phone"></i> ${c.phone || 'Sin número'}</p>
                 </div>
             </div>
-        `;
-    });
-
-    Object.keys(columns).forEach(key => {
-        let safeKey = key.replace(/ /g, '-');
-        let container = document.getElementById(`kb-${safeKey}`);
-        let badge = document.getElementById(`kb-count-${safeKey.substring(0,4).toLowerCase()}`);
-        if(container) container.innerHTML = columns[key] || '<p class="text-muted text-center" style="font-size:0.8rem">Sin órdenes</p>';
-        if(badge) badge.innerText = counts[key];
+            <div class="contact-actions">
+                <button class="btn-primary w-100" onclick="window.open('https://wa.me/591${c.phone || ''}')"><i class="fa-brands fa-whatsapp"></i> Chat</button>
+                <button class="btn-outline btn-small" onclick="editarCliente(${c.id}, '${safeName}', '${c.phone}')" title="Editar"><i class="fa-solid fa-pen"></i></button>
+                <button class="btn-danger btn-small" onclick="eliminarCliente(${c.id})" title="Eliminar"><i class="fa-solid fa-trash"></i></button>
+            </div>
+        </div>`;
     });
 }
 
-window.deleteOrder = function(id) {
-    if(confirm('¿Eliminar orden?')) {
-        db.orders = db.orders.filter(o => o.id !== id);
-        saveData('orders');
-        renderKanban();
-        updateDashboardStats();
+function renderInventory() {
+    const tbody = document.getElementById("inventory-list");
+    if(!tbody) return;
+    tbody.innerHTML = '';
+    globalInventory.forEach(i => {
+        tbody.innerHTML += `<tr>
+            <td><strong>${i.item_name}</strong></td>
+            <td><span class="badge ${i.stock_current <= i.stock_min ? 'bg-danger' : 'bg-success'}">${i.stock_current}</span></td>
+            <td>Bs. ${i.price || '0.00'}</td>
+            <td>
+                <button class="btn-outline btn-small" onclick="editarInsumo(${i.id}, '${i.item_name}', ${i.stock_current}, ${i.price || 0})" style="padding: 5px 10px; margin-right: 5px;"><i class="fa-solid fa-pen"></i></button>
+                <button class="btn-danger btn-small" onclick="eliminarInsumo(${i.id})" style="padding: 5px 10px;"><i class="fa-solid fa-trash"></i></button>
+            </td>
+        </tr>`;
+    });
+}
+
+function renderKanban() {
+    const cols = ['Cotización', 'En Proceso', 'Pendiente de Pago', 'Completado'];
+    cols.forEach(status => {
+        const wrapper = document.getElementById(`kb-${status.replace(/ /g, '-')}`);
+        if(!wrapper) return;
+        wrapper.innerHTML = '';
+        const items = globalOrders.filter(o => o.status === status);
+        items.forEach(o => {
+            wrapper.innerHTML += `<div class="order-card card-${o.module}">
+                <div class="oc-header"><span class="oc-client">${o.client}</span></div>
+                <div class="oc-desc">${o.project || 'Sin detalle'}</div>
+                <div class="oc-footer" style="display:flex; justify-content:space-between; align-items:center;">
+                    <span class="oc-price">Bs. ${o.total}</span>
+                    <div style="display:flex; gap:5px;">
+                        <button class="btn-danger btn-small" onclick="eliminarOrden(${o.id})" style="padding: 5px 10px;" title="Eliminar"><i class="fa-solid fa-trash"></i></button>
+                        ${status !== 'Completado' ? `<button class="btn-success btn-small" onclick="avanzarOrden(${o.id}, '${status}')" style="padding: 5px 10px;" title="Avanzar Estado"><i class="fa-solid fa-arrow-right"></i></button>` : ''}
+                    </div>
+                </div>
+            </div>`;
+        });
+    });
+}
+
+// =========================================================================
+// 9. FUNCIONES CRUD COMPLETAS (CRM, INVENTARIO, ORDENES, BRIEFS)
+// =========================================================================
+
+window.eliminarCliente = (id) => {
+    if(!confirm("¿Estás seguro de eliminar este cliente permanentemente?")) return;
+    fetch(API_URL + "?action=delete_client", { method: 'POST', body: JSON.stringify({id}) }).then(r=>r.json()).then(res => {
+        if(res.success) { showToast("Cliente eliminado", "success"); fetchData(); }
+    });
+};
+
+window.editarCliente = (id, oldName, oldPhone) => {
+    const name = prompt("Nuevo nombre del cliente:", oldName);
+    if(!name) return;
+    const phone = prompt("Nuevo teléfono:", oldPhone);
+    fetch(API_URL + "?action=edit_client", { method: 'POST', body: JSON.stringify({id, name, phone}) }).then(r=>r.json()).then(res => {
+        if(res.success) { showToast("Cliente actualizado", "success"); fetchData(); }
+    });
+};
+
+window.eliminarInsumo = (id) => {
+    if(!confirm("¿Borrar este insumo del inventario?")) return;
+    fetch(API_URL + "?action=delete_inventory", { method: 'POST', body: JSON.stringify({id}) }).then(r=>r.json()).then(res => {
+        if(res.success) { showToast("Insumo eliminado", "success"); fetchData(); }
+    });
+};
+
+window.editarInsumo = (id, oldName, oldStock, oldPrice) => {
+    const item_name = prompt("Nombre del insumo:", oldName);
+    if(!item_name) return;
+    const stock_current = prompt("Stock actual:", oldStock);
+    const price = prompt("Precio Base (Bs.):", oldPrice);
+    fetch(API_URL + "?action=edit_inventory", { method: 'POST', body: JSON.stringify({id, item_name, stock_current: parseInt(stock_current||0), price: parseFloat(price||0)}) }).then(r=>r.json()).then(res => {
+        if(res.success) { showToast("Insumo actualizado", "success"); fetchData(); }
+    });
+};
+
+window.eliminarOrden = (id) => {
+    if(!confirm("¿Eliminar esta orden del sistema? Esta acción no se puede deshacer.")) return;
+    fetch(API_URL + "?action=delete_order", { method: 'POST', body: JSON.stringify({id}) }).then(r=>r.json()).then(res => {
+        if(res.success) { showToast("Orden eliminada", "success"); fetchData(); }
+    });
+};
+
+window.avanzarOrden = (id, currentStatus) => {
+    const statuses = ['Cotización', 'En Proceso', 'Pendiente de Pago', 'Completado'];
+    const nextIdx = statuses.indexOf(currentStatus) + 1;
+    if(nextIdx >= statuses.length) return;
+    const status = statuses[nextIdx];
+    fetch(API_URL + "?action=update_order_status", { method: 'POST', body: JSON.stringify({id, status}) }).then(r=>r.json()).then(res => {
+        if(res.success) { showToast("Orden avanzada a: " + status, "success"); fetchData(); }
+    });
+};
+window.abrirModalClientCreate = () => {
+    const name = prompt("Nombre completo del nuevo cliente:");
+    if(!name) return;
+    const phone = prompt("Teléfono (WhatsApp):");
+    fetch(API_URL + "?action=add_client", {
+        method: 'POST',
+        body: JSON.stringify({ name, phone, notes: "" })
+    }).then(r=>r.json()).then(data => {
+        if(data.success) { showToast("Contacto guardado en el CRM", "success"); fetchData(); }
+    });
+};
+
+window.abrirModalInventoryCreate = () => {
+    const item_name = prompt("Nombre del Insumo / Servicio:");
+    if(!item_name) return;
+    const stock_current = prompt("Cantidad inicial en stock:", "1");
+    fetch(API_URL + "?action=add_inventory", {
+        method: 'POST',
+        body: JSON.stringify({ item_name, category: "Gral", stock_current: parseInt(stock_current), stock_min: 5, price: 0 })
+    }).then(r=>r.json()).then(data => {
+        if(data.success) { showToast("Insumo añadido al almacén", "success"); fetchData(); }
+    });
+};
+
+document.getElementById('btn-save-brief')?.addEventListener('click', async () => {
+    const client = document.getElementById('brief-client').value;
+    const project = document.getElementById('brief-project').value;
+    const objective = document.getElementById('brief-objective').value;
+    const deliverables = document.getElementById('brief-deliverables').value;
+    
+    if(!client || !project) return showToast("El cliente y el proyecto son requeridos", "error");
+    
+    const payload = { client, project, objective, deliverables };
+    const res = await fetch(API_URL + "?action=save_brief", { method: 'POST', body: JSON.stringify(payload) });
+    const data = await res.json();
+    
+    if(data.success) {
+        showToast("Brief Creativo generado y guardado", "success");
+        document.getElementById('brief-client').value = '';
+        document.getElementById('brief-project').value = '';
+        document.getElementById('brief-objective').value = '';
+        document.getElementById('brief-deliverables').value = '';
+        fetchData();
     }
-}
+});
 
-// --- GRÁFICOS Y DASHBOARD (Nivel Dios) ---
-let revChart, invChart;
-
-function initCharts() {
-    const ctxRev = document.getElementById('revenueChart').getContext('2d');
-    revChart = new Chart(ctxRev, {
-        type: 'line',
-        data: {
-            labels: ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'],
-            datasets: [{
-                label: 'Ingresos (Bs)',
-                data: [1200, 1900, 800, 2500, 3200, 1500, 900],
-                borderColor: '#4f46e5',
-                backgroundColor: 'rgba(79, 70, 229, 0.1)',
-                fill: true,
-                tension: 0.4
-            }]
-        },
-        options: { responsive: true, maintainAspectRatio: false }
-    });
-
-    const ctxInv = document.getElementById('inventoryChart').getContext('2d');
-    invChart = new Chart(ctxInv, {
-        type: 'doughnut',
-        data: {
-            labels: ['Soporte IT', 'Marketing', 'Diseño'],
-            datasets: [{
-                data: [45, 25, 30],
-                backgroundColor: ['#0ea5e9', '#ec4899', '#8b5cf6'],
-                borderWidth: 0
-            }]
-        },
-        options: { responsive: true, maintainAspectRatio: false, cutout: '75%' }
+function renderBriefs() {
+    const grid = document.getElementById("briefs-grid");
+    if(!grid) return;
+    grid.innerHTML = '';
+    globalBriefs.forEach(b => {
+        grid.innerHTML += `<div class="contact-card card-glass" style="border-left: 4px solid var(--accent);">
+            <div class="contact-info">
+                <h3>${b.client} - ${b.project}</h3>
+                <p style="margin-top: 8px;"><strong>Objetivo:</strong> ${b.objective}</p>
+                <p><strong>Entregables:</strong> ${b.deliverables}</p>
+            </div>
+            <div class="contact-actions">
+                <button class="btn-outline btn-small w-100"><i class="fa-solid fa-file-pdf"></i> PDF</button>
+            </div>
+        </div>`;
     });
 }
 
-function updateDashboardStats() {
-    const totalRevenue = db.orders.reduce((sum, o) => sum + o.total, 0);
-    document.getElementById('dash-revenue').innerText = `Bs. ${totalRevenue.toFixed(2)}`;
-    document.getElementById('dash-active').innerText = db.orders.length;
-    document.getElementById('dash-clients').innerText = db.clients.length;
+// Sobrescribir updateUI para asegurar renderBriefs y selectores de reportes
+const oldUpdateUI = updateUI;
+updateUI = () => {
+    oldUpdateUI();
+    renderBriefs();
+    poblarSelectorReportes();
+};
+
+function poblarSelectorReportes() {
+    const select = document.getElementById('report-order-select');
+    if(!select) return;
+    select.innerHTML = '<option value="">Seleccione una orden...</option>';
+    globalOrders.forEach(o => {
+        select.innerHTML += `<option value="${o.id}">${o.client} - ${o.project} (Bs. ${o.total})</option>`;
+    });
 }
 
-function updateCharts() {
-    // Aquí puedes agregar lógica para actualizar los gráficos con db.orders reales
-    if(revChart) revChart.update();
-    if(invChart) invChart.update();
-}
+window.generarReporteUniversally = () => {
+    const orderId = document.getElementById('report-order-select').value;
+    const type = document.getElementById('report-type-select').value;
+    
+    if(!orderId) return showToast("Por favor selecciona una orden", "error");
+    
+    const order = globalOrders.find(o => o.id == orderId);
+    if(!order) return;
+    
+    const printArea = document.getElementById('print-content');
+    
+    let title = "Cotización de Servicios";
+    let subtitle = "Válido por 15 días";
+    if(type === 'recibo') { title = "Recibo de Pago"; subtitle = "Comprobante oficial de transacción"; }
+    else if(type === 'progreso') { title = "Reporte de Avance"; subtitle = "Estado actual del proyecto"; }
+    
+    const today = new Date().toLocaleDateString('es-ES');
+    let itemsHtml = '';
+    
+    try {
+        const items = typeof order.items === 'string' ? JSON.parse(order.items) : order.items;
+        if(items && items.length) {
+            items.forEach(it => {
+                itemsHtml += `<tr><td>${it.desc}</td><td>1</td><td>Bs. ${it.price}</td><td>Bs. ${it.price}</td></tr>`;
+            });
+        } else {
+            itemsHtml = `<tr><td colspan="4">Servicio General: ${order.project}</td></tr>`;
+        }
+    } catch(e) { itemsHtml = `<tr><td colspan="4">Servicio General: ${order.project}</td></tr>`; }
 
-// --- UTILIDADES (Toast Notifications) ---
-function showToast(message, type = 'info') {
-    const toast = document.createElement('div');
-    toast.style.cssText = `
-        position: fixed; top: 20px; right: 20px; z-index: 10000;
-        background: ${type === 'success' ? 'var(--success)' : type === 'warning' ? 'var(--warning)' : 'var(--accent)'};
-        color: white; padding: 15px 25px; border-radius: 8px; font-weight: 600;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.2); animation: slideInRight 0.3s ease forwards;
+    printArea.innerHTML = `
+        <div class="print-header">
+            <div class="print-brand">
+                <h1>AZIER SUITE</h1>
+                <p>Gestión y Desarrollo Empresarial<br>Tel: +591 77173169<br>admin@aziervillanueva.com</p>
+            </div>
+            <div class="print-title">
+                <h2>${title}</h2>
+                <p>Doc. Ref: #${order.id.toString().padStart(6, '0')}<br>Fecha: ${today}</p>
+            </div>
+        </div>
+        
+        <div class="print-meta-grid">
+            <div class="print-meta-box">
+                <h4>Datos del Cliente</h4>
+                <p>${order.client}</p>
+                <p style="color:#64748b; font-size:0.9rem; font-weight:400;">Tel: ${order.phone || 'No registrado'}</p>
+            </div>
+            <div class="print-meta-box">
+                <h4>Información del Proyecto</h4>
+                <p>${order.project}</p>
+                <p style="color:#64748b; font-size:0.9rem; font-weight:400;">Módulo: ${order.module.toUpperCase()} | Estado: ${order.status}</p>
+            </div>
+        </div>
+        
+        <table class="print-table">
+            <thead>
+                <tr><th>Descripción</th><th>Cant.</th><th>P. Unitario</th><th>Total</th></tr>
+            </thead>
+            <tbody>${itemsHtml}</tbody>
+        </table>
+        
+        <div class="print-summary">
+            <div class="print-summary-row"><span>Subtotal:</span><span>Bs. ${order.subtotal || order.total}</span></div>
+            <div class="print-summary-row"><span>Descuento:</span><span>Bs. ${order.discount || '0.00'}</span></div>
+            <div class="print-summary-row total"><span>TOTAL NETO:</span><span>Bs. ${order.total}</span></div>
+        </div>
+        
+        <div class="print-footer">
+            <p>Gracias por confiar en Azier Suite. ${subtitle}.<br>Generado automáticamente desde la plataforma operativa.</p>
+        </div>
     `;
-    toast.innerHTML = message;
-    document.body.appendChild(toast);
-    setTimeout(() => {
-        toast.style.animation = 'slideOutRight 0.3s ease forwards';
-        setTimeout(() => toast.remove(), 300);
-    }, 3000);
-}
-
-// Keyframes generados dinámicamente para los Toasts
-const style = document.createElement('style');
-style.innerHTML = `
-    @keyframes slideInRight { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-    @keyframes slideOutRight { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
-`;
-document.head.appendChild(style);
+    
+    // Trigger Print
+    setTimeout(() => { window.print(); }, 500);
+};

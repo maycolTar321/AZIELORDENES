@@ -30,9 +30,18 @@ if ($action === 'save_order') {
     // Save Order
     $stmt = $pdo->prepare("INSERT INTO orders (module, client, phone, project, status, subtotal, discount, total, advance, balance, notes, items_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     $stmt->execute([
-        $data['module'], $data['client'], $data['phone'], $data['project'], $data['status'],
-        $data['subtotal'], $data['discount'], $data['total'], $data['advance'], $data['balance'],
-        $data['notes'], json_encode($data['items'])
+        $data['module'] ?? '', 
+        $data['client'] ?? '', 
+        $data['phone'] ?? '', 
+        $data['project'] ?? '', 
+        $data['status'] ?? 'Pendiente',
+        $data['subtotal'] ?? 0, 
+        $data['discount'] ?? 0, 
+        $data['total'] ?? 0, 
+        $data['advance'] ?? 0, 
+        $data['balance'] ?? 0,
+        $data['notes'] ?? '', 
+        json_encode($data['cart'] ?? [])
     ]);
     $order_id = $pdo->lastInsertId();
 
@@ -67,8 +76,9 @@ if ($action === 'get_data') {
     $inventory = $pdo->query("SELECT * FROM inventory ORDER BY category")->fetchAll();
     $tasks = $pdo->query("SELECT * FROM tasks ORDER BY status, id DESC")->fetchAll();
     $users = $pdo->query("SELECT id, email, role, status FROM users ORDER BY id DESC")->fetchAll();
+    $briefs = $pdo->query("SELECT * FROM briefs ORDER BY id DESC")->fetchAll();
     
-    echo json_encode(["orders" => $orders, "clients" => $clients, "inventory" => $inventory, "tasks" => $tasks, "users" => $users]);
+    echo json_encode(["orders" => $orders, "clients" => $clients, "inventory" => $inventory, "tasks" => $tasks, "users" => $users, "briefs" => $briefs]);
     exit;
 }
 
@@ -199,6 +209,17 @@ if ($action === 'save_settings') {
     exit;
 }
 
+if ($action === 'save_brief') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $stmt = $pdo->prepare("INSERT INTO briefs (client, project, objective, deliverables) VALUES (?, ?, ?, ?)");
+    if($stmt->execute([$data['client'], $data['project'], $data['objective'], $data['deliverables']])) {
+        echo json_encode(["success" => true, "id" => $pdo->lastInsertId()]);
+    } else {
+        echo json_encode(["error" => "Error adding brief"]);
+    }
+    exit;
+}
+
 if ($action === 'get_settings') {
     if (file_exists('config.json')) {
         echo file_get_contents('config.json');
@@ -207,4 +228,73 @@ if ($action === 'get_settings') {
     }
     exit;
 }
+
+// ======================= CRUD ENDPOINTS =======================
+
+if ($action === 'delete_client') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $stmt = $pdo->prepare("DELETE FROM clients WHERE id = ?");
+    if($stmt->execute([$data['id']])) {
+        echo json_encode(["success" => true]);
+    } else {
+        echo json_encode(["error" => "Error al eliminar"]);
+    }
+    exit;
+}
+
+if ($action === 'edit_client') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $stmt = $pdo->prepare("UPDATE clients SET name = ?, phone = ? WHERE id = ?");
+    if($stmt->execute([$data['name'], $data['phone'], $data['id']])) {
+        echo json_encode(["success" => true]);
+    } else {
+        echo json_encode(["error" => "Error al editar"]);
+    }
+    exit;
+}
+
+if ($action === 'delete_inventory') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $stmt = $pdo->prepare("DELETE FROM inventory WHERE id = ?");
+    if($stmt->execute([$data['id']])) {
+        echo json_encode(["success" => true]);
+    } else {
+        echo json_encode(["error" => "Error al eliminar"]);
+    }
+    exit;
+}
+
+if ($action === 'edit_inventory') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $stmt = $pdo->prepare("UPDATE inventory SET item_name = ?, stock_current = ?, price = ? WHERE id = ?");
+    if($stmt->execute([$data['item_name'], $data['stock_current'], $data['price'], $data['id']])) {
+        echo json_encode(["success" => true]);
+    } else {
+        echo json_encode(["error" => "Error al editar"]);
+    }
+    exit;
+}
+
+if ($action === 'delete_order') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $stmt = $pdo->prepare("DELETE FROM orders WHERE id = ?");
+    if($stmt->execute([$data['id']])) {
+        echo json_encode(["success" => true]);
+    } else {
+        echo json_encode(["error" => "Error al eliminar"]);
+    }
+    exit;
+}
+
+if ($action === 'update_order_status') {
+    $data = json_decode(file_get_contents('php://input'), true);
+    $stmt = $pdo->prepare("UPDATE orders SET status = ? WHERE id = ?");
+    if($stmt->execute([$data['status'], $data['id']])) {
+        echo json_encode(["success" => true]);
+    } else {
+        echo json_encode(["error" => "Error al actualizar estado"]);
+    }
+    exit;
+}
+
 ?>
